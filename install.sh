@@ -73,7 +73,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 echo -e "${CYAN}${BOLD}============================================================${NC}"
-echo -e "${CYAN}${BOLD}   FNAF: Help Wanted 2 — HW2-PerfBoost Installer (Linux)${NC}"
+echo -e "${CYAN}${BOLD}   FNAF: Help Wanted 2 - HW2-PerfBoost Installer (Linux)${NC}"
 echo -e "${CYAN}${BOLD}============================================================${NC}"
 echo ""
 
@@ -103,10 +103,10 @@ fi
 if [[ -z "$PRESET" ]]; then
   echo ""
   echo "Choose a preset to install:"
-  echo "  1) NativeQuality (Recommended - Max Visuals) — 1.58x-1.76x FPS at 100% NATIVE resolution (zero upscaling!)"
-  echo "  2) Balanced      (Recommended - High FPS/VR) — 2.07x-2.24x FPS (80% Fast TAAU Flat / 2x MSAA VR)"
-  echo "  3) UltraPerf                                 — 2.21x-2.37x FPS (75% Fast TAAU / Steam Deck / Low-End GPU)"
-  echo "  4) Uninstall                                 — Remove HW2-PerfBoost and restore stock"
+  echo "  1) NativeQuality (Recommended, max visuals) : 1.58x-1.76x FPS at 100% native res (no upscaling)"
+  echo "  2) Balanced      (Recommended, VR & high FPS): 2.07x-2.24x FPS (80% Fast TAAU Flat / 2x MSAA VR)"
+  echo "  3) UltraPerf                                 : 2.21x-2.37x FPS (75% Fast TAAU / Steam Deck / low-end GPU)"
+  echo "  4) Uninstall                                 : Remove HW2-PerfBoost and restore stock"
   echo ""
   read -rp "Selection [1-4, default=1]: " CHOICE
   case "${CHOICE:-1}" in

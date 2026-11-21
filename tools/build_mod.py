@@ -3,10 +3,9 @@
 FNAF: Help Wanted 2 - Performance Boost Mod Builder (HW2-PerfBoost)
 Builds UE4.27 *_P.pak performance mod archives with three benchmark-verified presets.
 
-All settings were scientifically validated via MangoHud ablation benchmarks on UE 4.27
-Forward Shading (DX11/DXVK). Known UE 4.27 Forward-Shading regressions (such as Gen5 TAA
-r.TemporalAA.Algorithm=1, forced r.EarlyZPass=2, and coarse r.Forward.LightGridPixelSize=64)
-are explicitly avoided.
+All settings were verified via MangoHud benchmarks on UE 4.27 Forward Shading (DX11/DXVK).
+Known UE 4.27 Forward-Shading regressions (such as Gen5 TAA r.TemporalAA.Algorithm=1,
+forced r.EarlyZPass=2, and coarse r.Forward.LightGridPixelSize=64) are explicitly avoided.
 
 Layers patched inside each *_P.pak:
   1. Thumper/Content/Data/VisualQualityOptions/** (UVisualQualitySettingSpec DataAssets)

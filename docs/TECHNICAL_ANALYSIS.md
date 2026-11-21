@@ -1,81 +1,84 @@
-# Technical Analysis: Why *FNAF: Help Wanted 2* Drops Frames on PC (VR & Flat Mode)
+# Technical Notes: Help Wanted 2 Performance Bottlenecks
 
-This document details the forensic engine analysis performed on **Five Nights at Freddy's: Help Wanted 2** (`Thumper`, Unreal Engine **4.27**, Steam AppID `2287520`) by inspecting `Thumper-WindowsNoEditor.pak`, `HW2-Win64-Shipping.exe`, and runtime behavior.
+This is a short breakdown of what we found while digging into **Five Nights at Freddy's: Help Wanted 2** (`Thumper`, Unreal Engine 4.27, Steam AppID `2287520`) by inspecting `Thumper-WindowsNoEditor.pak` and `HW2-Win64-Shipping.exe`.
 
----
+## Why normal Engine.ini tweaks barely work
 
-## 1. Architecture Overview
+Help Wanted 2 uses UE 4.27 with Forward Shading (`r.ForwardShading=True`) and `vr.InstancedStereo=True`. Instead of relying on standard `Engine.ini` settings, Steel Wool uses a custom `UVisualQualitySubsystem` that reads DataAssets from `Thumper/Content/Data/VisualQualityOptions/**`.
 
-- **Engine**: Unreal Engine 4.27 (`++UE4+Release-4.27`, Forward Shading `r.ForwardShading=True`, `vr.InstancedStereo=True`, DX11 SM5 default with DX12 SM5 support).
-- **Graphics Settings System**: Steel Wool Games uses a custom `SWGCommonGame` subsystem (`UVisualQualitySubsystem`) driven by `UVisualQualitySettingSpec` DataAssets (`Thumper/Content/Data/VisualQualityOptions/**`).
-- **Why generic `Engine.ini` tweaks fail**: At startup and whenever quality settings are applied, `UVisualQualitySubsystem::ApplyVisualQualitySettings()` executes the CVars inside `VisualQuality_Base_PC_*` and `PlayerOverrides/*` via console commands (`ECVF_SetByConsole`) and invokes `dp.Override = Windows_FLAT` / `dp.Override = Windows_VR`. Because `ECVF_SetByConsole` has higher priority than `Engine.ini` (`ECVF_SetBySystemSettingsIni`), standard `Engine.ini` mods get **silently overwritten** on many of the highest-impact settings.
+When the game starts or updates graphics settings, it runs the commands from those assets via console commands (`ECVF_SetByConsole`) and switches device profiles (`dp.Override = Windows_FLAT` or `Windows_VR`). Because `ECVF_SetByConsole` beats `Engine.ini`, regular config tweaks get silently overwritten on many of the settings that matter most.
 
----
+## Main issues found in the stock PC presets
 
-## 2. Bottlenecks & Bugs Found in Stock Help Wanted 2
+### 1. `sg.EffectsQuality=3` turns SSR, SSGI, and 64-bit SceneColor back on
 
-### Bug 1: `sg.EffectsQuality=3` Silently Re-Enables SSR, SSGI, and 64-bit FloatRGBA Scene Color
-In `VisualQuality_Base_PC_High_FLAT` and `VisualQuality_Base_PC_High` (VR), Steel Wool explicitly sets:
+Both `VisualQuality_Base_PC_High_FLAT` and `VisualQuality_Base_PC_High` (VR) explicitly disable SSR with `r.SSR.Quality=0`. Right after that, `VisualQuality_Effects_High` runs `sg.EffectsQuality=3`, which pulls in Unreal's `BaseScalability.ini [EffectsQuality@3]`:
+
 ```ini
-r.SSR.Quality=0
-```
-Immediately afterwards, `VisualQuality_Effects_High_FLAT` and `VisualQuality_Effects_High` execute `sg.EffectsQuality=3`, which loads UE4's `BaseScalability.ini [EffectsQuality@3]`:
-```ini
-r.SSR.Quality=3              ; Re-enables full-res Screen Space Reflections!
+r.SSR.Quality=3
 r.SSR.HalfResSceneColor=0
-r.SSGI.Quality=3             ; Re-enables Screen Space Global Illumination!
-r.SceneColorFormat=4         ; 64-bit FloatRGBA instead of 32-bit FloatR11G11B10 (2x color bandwidth!)
-r.TranslucencyLightingVolumeDim=64 ; 64^3 = 262,144 voxels (8x the cost of 32^3!)
+r.SSGI.Quality=3
+r.SceneColorFormat=4               ; 64-bit FloatRGBA instead of 32-bit R11G11B10F
+r.TranslucencyLightingVolumeDim=64 ; 64^3 voxels instead of 24^3 or 32^3
 r.SSS.HalfRes=0
 r.AnisotropicMaterials=1
 ```
-Notably, in `VisualQuality_Effects_High_XSX_FLAT` (Xbox Series X), Steel Wool caught this and appended `r.SSR.quality=0` at the end — **but forgot to do so on PC**.
 
-### Bug 2: Hidden 105% Supersampling & Broken `r.MSAACount=6` (VR)
-- `VisualQuality_Resolution_High` sets **both** `r.ScreenPercentage=105` and `vr.PixelDensity=1.05` (supersampling above native resolution by default).
-- `VisualQuality_AntiAlias_High` (VR) sets `r.MSAACount=6`, which is not a power-of-two MSAA sample count in D3D11 and pushes MSAA resolve/bandwidth far beyond 2x–4x MSAA.
-- `vr.RoundRobinOcclusion` and `vr.VRS.HMDFixedFoveationLevel` are both left disabled (`0`).
+Interestingly, Steel Wool noticed this on Xbox Series X (`VisualQuality_Effects_High_XSX_FLAT`) and added `r.SSR.quality=0` at the end of that asset, but forgot to do the same on PC.
 
-### Bug 3: Heavy Cinematic TAA (`PostProcessAAQuality=6`, 16 Samples, Lanczos Upscale) in Flat Mode
-`VisualQuality_AntiAlias_High_FLAT` uses:
+### 2. VR double-supersampling and `r.MSAACount=6`
+
+- `VisualQuality_Resolution_High` sets both `r.ScreenPercentage=105` and `vr.PixelDensity=1.05`.
+- `VisualQuality_AntiAlias_High` sets `r.MSAACount=6`, which is not a standard D3D11 power-of-two sample count and increases MSAA bandwidth cost well beyond 2x/4x.
+- `vr.RoundRobinOcclusion` and `vr.VRS.HMDFixedFoveationLevel` are both left at `0`.
+
+### 3. Heavy Flat Mode TAA setup
+
+`VisualQuality_AntiAlias_High_FLAT` sets:
+
 ```ini
 r.DefaultFeature.AntiAliasing=2
-r.PostProcessAAQuality=6       ; Cinematic TAA cost
-r.TemporalAASamples=16         ; 16-sample jitter
-r.Upscale.Quality=5            ; Expensive Lanczos pass
-r.TemporalAA.Upsampling=0      ; Disables fast TAAU
+r.PostProcessAAQuality=6
+r.TemporalAASamples=16
+r.Upscale.Quality=5
+r.TemporalAA.Upsampling=0
 ```
-Meanwhile, on PS5 and Xbox Series X/S (`VisualQuality_Base_PS5_FLAT` / `XSX_X`), Steel Wool used dynamic resolution scaling down to `77%`. Switching PC Flat Mode to UE 4.27's **fast Gen4 TAA/TAAU** (`r.TemporalAA.Algorithm=0`, `r.PostProcessAAQuality=2`, `r.TemporalAASamples=4`, `r.TemporalAA.R11G11B10History=1`) — and explicitly avoiding `r.TemporalAA.Algorithm=1` (Gen5 TAA), which our ablation benchmarks proved adds ~1.5 ms GPU overhead in Forward Shading — recovers massive GPU performance while keeping edges clean and temporally stable.
 
-### Bug 4: 10 Cascaded Shadow Maps & Tiny-Object Shadow Draw Calls
-`VisualQuality_Shadows_High_FLAT` triggers `sg.ShadowQuality=3`, which executes UE4's `BaseScalability.ini [ShadowQuality@3]`:
-- `r.Shadow.CSM.MaxCascades=10` (for enclosed indoor minigame rooms!)
+On PS5 and Xbox Series X/S (`VisualQuality_Base_PS5_FLAT` / `XSX_X`), the game already uses dynamic resolution scaling down to 77%. On PC, switching to standard fast UE 4.27 TAA/TAAU (`r.TemporalAA.Algorithm=0`, `r.PostProcessAAQuality=2`, `r.TemporalAASamples=4`, `r.TemporalAA.R11G11B10History=1`) saves a lot of GPU time while keeping edges clean.
+
+One important lesson from testing: enabling UE 4.27's Gen5 TAA (`r.TemporalAA.Algorithm=1`) actually hurts performance badly here (around +1.5 ms GPU overhead at 4K in Forward Shading), so we keep `r.TemporalAA.Algorithm=0`.
+
+### 4. Overkill shadow settings for indoor rooms
+
+`VisualQuality_Shadows_High_FLAT` sets `sg.ShadowQuality=3`, which enables:
+
+- `r.Shadow.CSM.MaxCascades=10` (for small indoor FNAF minigame rooms)
 - `r.Shadow.MaxResolution=2048` and `r.Shadow.MaxCSMResolution=2048`
-- `r.Shadow.RadiusThreshold=0.01` (forces dynamic shadow draw calls on tiny 1% screen-size clutter)
+- `r.Shadow.RadiusThreshold=0.01` (casts dynamic shadows from tiny background clutter)
 - `r.DistanceFieldShadowing=1` and `r.DistanceFieldAO=1`
-- `r.ShadowQuality=5` (expensive PCF shadow filter)
+- `r.ShadowQuality=5`
 
-Reducing cascades to `2–3`, raising `RadiusThreshold` to `0.035–0.045`, using 1024px shadow maps, and switching PCF filter quality to `r.ShadowQuality=2` cuts both GPU shadow pixel cost and CPU shadow draw-call submission drastically while keeping character/animatronic shadows crisp.
+Dropping this to 2 or 3 cascades, 1024px shadow maps, `r.Shadow.RadiusThreshold=0.035` to `0.045`, and `r.ShadowQuality=2` cuts both GPU and draw-call load while keeping animatronic and room shadows sharp.
 
-### Bug 5: Forced Negative LOD Biases & DeviceProfile Typos
-- `VisualQuality_Textures_High` / `High_FLAT`: sets `r.MipMapLODBias=-1`, forcing textures one full mip higher at every distance (extra memory bandwidth + aliasing shimmer).
-- `VisualQuality_Character_High/Medium/Low_FLAT`: **all three** presets set `r.SkeletalMeshLODBias=-1`, preventing skeletal LOD transitions even on distant characters.
-- `WindowsDeviceProfiles.ini`: contains a typo `+CVars=r.LenseFlareQuality=0` (instead of `r.LensFlareQuality=0`) and sets `r.Streaming.PoolSize=1024` (1 GB) in the base `[Windows DeviceProfile]`, alongside `r.AmbientOcclusionLevels=1` contradicting `r.DefaultFeature.AmbientOcclusion=0`.
+### 5. Forced negative LOD biases and DeviceProfile typos
 
-### Optimization 6: Mesh Draw Instancing, Translucency, & Parallel RHI
-- Enabling `r.MeshDrawCommands.DynamicInstancing=1`, `r.MeshDrawCommands.UseCachedCommands=1`, and `r.MeshDrawCommands.ParallelPassSetup=1` reduces CPU draw-call overhead.
-- Keeping UE 4.27's default `r.Forward.LightGridPixelSize=32` and Forward EarlyZ pass intact (our ablation study confirmed forcing `LightGridPixelSize=64` or `EarlyZPass=2` degrades Forward Shading performance).
-- Disabling `r.SeparateTranslucency=0` in Flat Mode (already `0` in VR) eliminates an extra full-resolution render target & composite pass.
-- Enabling `a.ParallelAnimEvaluation=1`, `a.ParallelAnimUpdate=1`, `a.URO.Enable=1`, and `r.GTSyncType=1` reduces GameThread/RenderThread stalls.
+- `VisualQuality_Textures_High` and `High_FLAT` set `r.MipMapLODBias=-1`, pushing textures one mip level higher than needed and adding extra bandwidth and shimmer.
+- `VisualQuality_Character_High`, `Medium`, and `Low` (Flat) all set `r.SkeletalMeshLODBias=-1`, preventing skeletal LOD transitions even at a distance.
+- `WindowsDeviceProfiles.ini` has a typo (`+CVars=r.LenseFlareQuality=0` instead of `r.LensFlareQuality=0`), caps `r.Streaming.PoolSize=1024` in the base profile, and sets `r.AmbientOcclusionLevels=1` even though `r.DefaultFeature.AmbientOcclusion=0`.
 
----
+### 6. Draw calls and Forward Shading traps to avoid
 
-## 3. How `HW2-PerfBoost` Applies Fixes Cleanly
+- Enabling `r.MeshDrawCommands.DynamicInstancing=1`, `r.MeshDrawCommands.UseCachedCommands=1`, and `r.MeshDrawCommands.ParallelPassSetup=1` helps reduce CPU draw-call overhead.
+- Disabling `r.SeparateTranslucency=0` in Flat Mode (it is already `0` in VR) avoids an extra full-resolution render target pass.
+- We tested `r.Forward.LightGridPixelSize=64` and `r.EarlyZPass=2` and found they made performance worse in HW2's Forward Renderer, so both are intentionally left at UE4 defaults.
 
-All modifications are packaged into a single lightweight UE4.27 patch archive (`HW2PerfBoost_<Preset>_P.pak`) placed in `Thumper/Content/Paks/~mods/`:
-1. **`Thumper/Content/Data/VisualQualityOptions/**`** — Patched `.uasset`/`.uexp` DataAssets so `UVisualQualitySubsystem` executes optimized CVars directly.
-2. **`Thumper/Config/DefaultScalability.ini`** — Clean scalability overlay overriding `BaseScalability.ini`.
-3. **`Thumper/Config/Windows/WindowsDeviceProfiles.ini`** — Cleaned Windows / Flat / VR device profiles.
-4. **`Thumper/Config/DefaultEngine.ini`** — Safe boot-time engine/renderer CVars (leaving all gameplay, maps, collision profiles, navmesh, and audio untouched).
+## How the mod applies these fixes
 
-Zero game executables or base `.pak` files are ever modified. Removing the single `_P.pak` file restores 100% stock behavior immediately.
+Everything is packed into a single uncompressed ~156 KB UE4.27 `_P.pak` file loaded from `Thumper/Content/Paks/~mods/`:
+
+1. `Thumper/Content/Data/VisualQualityOptions/**`: patched `.uasset` and `.uexp` assets so `UVisualQualitySubsystem` applies the fixed CVars cleanly.
+2. `Thumper/Config/DefaultScalability.ini`: overrides `BaseScalability.ini` tiers cleanly.
+3. `Thumper/Config/Windows/WindowsDeviceProfiles.ini`: cleaned-up Windows, Flat, and VR profiles.
+4. `Thumper/Config/DefaultEngine.ini`: safe renderer, shadow, instancing, streaming, and VR defaults (all gameplay, map, audio, and collision settings stay untouched).
+
+Deleting the single `.pak` file restores the game completely to stock.
